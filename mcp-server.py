@@ -1,4 +1,5 @@
 import asyncio
+import re
 from pathlib import Path
 
 import requests
@@ -16,6 +17,17 @@ TIMEOUT = 8
 server = FastMCP(name="Topic Experiment")
 
 
+def _read_data(file_name: str) -> str:
+    """Читает файл данных. Возвращает текст ошибки, если файла нет."""
+    path = DATA_DIR / file_name
+    try:
+        return path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return f"Ошибка: файл данных не найден: {file_name}."
+    except OSError as exc:
+        return f"Ошибка чтения файла данных: {type(exc).__name__}."
+
+
 @server.prompt()
 def explain_topic(topic: str, level: str = "beginner") -> str:
     """Генерирует промпт для объяснения темы в дружелюбной манере."""
@@ -30,19 +42,25 @@ def explain_topic(topic: str, level: str = "beginner") -> str:
 @server.resource("entry-weather-example://weather-letter", mime_type="text/markdown")
 def write_3way_intro() -> str:
     """Пример написания приветственного сообщения, если пользователь хочет информацию по погоде"""
-    return (DATA_DIR / "entry_letter.md").read_text(encoding="utf-8")
+    return _read_data("entry_letter.md")
 
 
 @server.resource("info-excursion://Paris-trips", mime_type="text/markdown")
 def write_excursion_intro() -> str:
     """Информация по экскурсиям в Париже"""
-    return (DATA_DIR / "paris_trips.md").read_text(encoding="utf-8")
+    return _read_data("paris_trips.md")
 
 
 @server.resource("info-city://Yekaterinburg", mime_type="text/markdown")
 def write_city_intro() -> str:
     """Краткая справка о Екатеринбурге: климат, транспорт, достопримечательности"""
-    return (DATA_DIR / "city_yekaterinburg.md").read_text(encoding="utf-8")
+    return _read_data("city_yekaterinburg.md")
+
+
+@server.resource("info-attraction://Baikal", mime_type="text/markdown")
+def write_baikal_intro() -> str:
+    """Справка о достопримечательности: озеро Байкал"""
+    return _read_data("baikal.md")
 
 
 @server.tool()
@@ -115,6 +133,32 @@ def convert_temperature(value: float, scale: str = "celsius") -> str:
     if scale_normalized.startswith("f"):
         return f"{value}°F = {round((value - 32) * 5 / 9, 1)}°C"
     return "Ошибка: параметр scale должен быть 'celsius' или 'fahrenheit'."
+
+
+MAX_TEXT_LENGTH = 10000
+
+
+@server.tool()
+def count_words(text: str) -> str:
+    """Считает слова, символы и предложения в тексте"""
+    if text is None:
+        return "Ошибка: передайте текст. Параметр text пустой."
+
+    cleaned = text.strip()
+    if not cleaned:
+        return "Ошибка: текст пустой. Передайте текст для подсчета."
+
+    if len(cleaned) > MAX_TEXT_LENGTH:
+        return f"Ошибка: текст слишком длинный. Максимум {MAX_TEXT_LENGTH} символов."
+
+    words = len(cleaned.split())
+    sentences = len([item for item in re.split(r"[.!?]+", cleaned) if item.strip()])
+    chars_with_spaces = len(text)
+    chars_without_spaces = len(re.sub(r"\s", "", text))
+    return (
+        f"Слова: {words}. Символы: {chars_with_spaces}. "
+        f"Символы без пробелов: {chars_without_spaces}. Предложения: {sentences}."
+    )
 
 
 if __name__ == "__main__":

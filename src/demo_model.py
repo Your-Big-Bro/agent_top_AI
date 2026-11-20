@@ -4,7 +4,7 @@ import re
 import uuid
 
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 
 CITY_RE = re.compile(r"(?:в|во)\s+([А-ЯЁA-Z][\w\-]+)")
@@ -35,6 +35,22 @@ def _city(query: str):
     return match.group(1) if match else None
 
 
+RESOURCE_KEYWORDS = ("байкал", "ольхон", "иркутск", "шаманка", "листвянка")
+
+
+def _resource_excerpt(system_text: str, query: str):
+    """Ищет ответ в тексте ресурсов, которые попали в system_prompt."""
+    low_query = query.lower()
+    keywords = [word for word in RESOURCE_KEYWORDS if word in low_query]
+    if not keywords:
+        return None
+    for block in system_text.split("\n\n"):
+        low_block = block.lower()
+        if len(block) > 80 and any(word in low_block for word in keywords):
+            return "Из ресурса: " + " ".join(block.split())[:400]
+    return None
+
+
 class ScriptedChatModel(BaseChatModel):
     """Имитирует модель: выбирает инструмент по ключевым словам запроса."""
 
@@ -55,6 +71,9 @@ class ScriptedChatModel(BaseChatModel):
         return self
 
     def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+        system_text = " ".join(
+            str(message.content) for message in messages if isinstance(message, SystemMessage)
+        )
         last_human = None
         tool_messages = []
         for message in messages:
@@ -71,8 +90,11 @@ class ScriptedChatModel(BaseChatModel):
         query = str(last_human.content) if last_human else ""
         call = self._choose(query)
         if call is None:
+            excerpt = _resource_excerpt(system_text, query)
+            if excerpt:
+                return self._answer(excerpt)
             return self._answer(
-                "Могу посчитать сумму, показать погоду или перевести температуру. Уточните запрос."
+                "Могу посчитать сумму, показать погоду, перевести температуру или посчитать слова. Уточните запрос."
             )
 
         name, args = call
@@ -91,6 +113,14 @@ class ScriptedChatModel(BaseChatModel):
 
     def _choose(self, query: str):
         low = query.lower()
+
+        if "посчита" in low and ("слов" in low or "символ" in low):
+            text = query
+            for marker in ("тексте:", "текст:", ":"):
+                if marker in query:
+                    text = query.split(marker, 1)[1].strip()
+                    break
+            return "count_words", {"text": text}
 
         if "погод" in low:
             return "get_weather", {"city": _city(query) or "Екатеринбург"}

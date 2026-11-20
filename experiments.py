@@ -99,6 +99,10 @@ async def tool_experiments(client):
         ("convert_temperature", {"value": 25, "scale": "celsius"}),
         ("convert_temperature", {"value": 77, "scale": "fahrenheit"}),
         ("convert_temperature", {"value": 10, "scale": "kelvin"}),
+        ("count_words", {"text": "Байкал - самое глубокое озеро мира. Летом там тепло."}),
+        ("count_words", {"text": ""}),
+        ("count_words", {"text": "   "}),
+        ("count_words", {"text": 123}),
     ]
     rows = []
     for name, args in cases:
