@@ -17,4 +17,11 @@ inspector:
 # Запуск агента, который будет взаимодействовать с MCP сервером
 agent:
 	python main.py
-	
+
+# Запуск агента по HTTP. Сначала запустите make mcp в другом терминале
+agent_http:
+	MCP_TRANSPORT=http python main.py
+
+# Эксперименты по заданиям 1-4. Пишет experiments/results.json
+experiments:
+	uv run --with fastmcp --with requests experiments.py
