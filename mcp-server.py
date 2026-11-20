@@ -1,35 +1,66 @@
-import asyncio 
+import asyncio
+from pathlib import Path
+
 import requests
 from fastmcp import FastMCP
 
 from src.utils.secrets import is_stdio
 
+BASE_DIR = Path(__file__).resolve().parent
+DATA_DIR = BASE_DIR / "src" / "data"
 
-server = FastMCP(name='Topic Experiment')
+GEO_URL = "https://geocoding-api.open-meteo.com/v1/search"
+WEATHER_URL = "https://api.open-meteo.com/v1/forecast"
+TIMEOUT = 8
+
+server = FastMCP(name="Topic Experiment")
 
 
 @server.prompt()
-def explain_topic(topic : str) -> str:
-    "Генерирует промпт для объяснения темы в дружелюбной манере"
-    return f"Can you explain {topic} in a beginner friendly manner with simple wordings and no technical jargon. Include Concept & Examples."
+def explain_topic(topic: str, level: str = "beginner") -> str:
+    """Генерирует промпт для объяснения темы в дружелюбной манере."""
+    styles = {
+        "beginner": "in a beginner friendly manner with simple wordings and no technical jargon",
+        "expert": "in a concise expert manner with precise terminology and no filler",
+    }
+    style = styles.get(level.lower().strip(), styles["beginner"])
+    return f"Can you explain {topic} {style}. Include Concept & Examples."
 
 
 @server.resource("entry-weather-example://weather-letter", mime_type="text/markdown")
 def write_3way_intro() -> str:
     """Пример написания приветственного сообщения, если пользователь хочет информацию по погоде"""
-    with open("src/data/entry_letter.md", "r", encoding="utf-8") as file:
-        return file.read()
-    
+    return (DATA_DIR / "entry_letter.md").read_text(encoding="utf-8")
+
+
 @server.resource("info-excursion://Paris-trips", mime_type="text/markdown")
 def write_excursion_intro() -> str:
     """Информация по экскурсиям в Париже"""
-    with open("src/data/paris_trips.md", "r", encoding="utf-8") as file:
-        return file.read()
-    
+    return (DATA_DIR / "paris_trips.md").read_text(encoding="utf-8")
+
+
+@server.resource("info-city://Yekaterinburg", mime_type="text/markdown")
+def write_city_intro() -> str:
+    """Краткая справка о Екатеринбурге: климат, транспорт, достопримечательности"""
+    return (DATA_DIR / "city_yekaterinburg.md").read_text(encoding="utf-8")
+
+
 @server.tool()
 async def add(a: int, b: int) -> str:
     """Сумма двух чисел"""
     return str(a + b)
+
+
+def _geocode(city: str):
+    """Возвращает первую запись геокодера или None."""
+    response = requests.get(
+        GEO_URL,
+        params={"name": city, "count": 1, "language": "ru"},
+        timeout=TIMEOUT,
+    )
+    response.raise_for_status()
+    results = response.json().get("results") or []
+    return results[0] if results else None
 
 
 @server.tool()
@@ -37,40 +68,59 @@ def get_weather(city: str) -> str:
     """
     Получает текущую погоду в городе.
     """
+    if not city or not city.strip():
+        return "Ошибка: укажите название города."
 
-    # 1 Получаем координаты города
-    geo_url = "https://geocoding-api.open-meteo.com/v1/search"
-    geo_resp = requests.get(geo_url, params={"name": city, "count": 1})
-    geo_data = geo_resp.json()
+    try:
+        geo = _geocode(city.strip())
+    except requests.Timeout:
+        return "Ошибка: сервис геокодирования не ответил вовремя. Повторите позже."
+    except requests.RequestException as exc:
+        return f"Ошибка сети при поиске города: {type(exc).__name__}."
+    except ValueError:
+        return "Ошибка: сервис геокодирования вернул некорректный ответ."
 
-    if "results" not in geo_data:
-        return "Город не найден."
+    if geo is None:
+        return f"Город не найден: {city}."
 
-    lat = geo_data["results"][0]["latitude"]
-    lon = geo_data["results"][0]["longitude"]
+    try:
+        response = requests.get(
+            WEATHER_URL,
+            params={
+                "latitude": geo["latitude"],
+                "longitude": geo["longitude"],
+                "current_weather": True,
+            },
+            timeout=TIMEOUT,
+        )
+        response.raise_for_status()
+        current = response.json()["current_weather"]
+    except requests.Timeout:
+        return "Ошибка: сервис погоды не ответил вовремя. Повторите позже."
+    except requests.RequestException as exc:
+        return f"Ошибка сети при получении погоды: {type(exc).__name__}."
+    except (KeyError, TypeError, ValueError):
+        return "Ошибка: сервис погоды вернул неожиданный ответ."
 
-    #  Получаем погоду
-    weather_url = "https://api.open-meteo.com/v1/forecast"
-    weather_resp = requests.get(
-        weather_url,
-        params={
-            "latitude": lat,
-            "longitude": lon,
-            "current_weather": True
-        },
-    )
-    weather_data = weather_resp.json()
+    name = geo.get("name", city)
+    return f"Погода в {name}: {current['temperature']}°C, ветер {current['windspeed']} км/ч"
 
-    temp = weather_data["current_weather"]["temperature"]
-    wind = weather_data["current_weather"]["windspeed"]
 
-    return f"Погода в {city}: {temp}°C, ветер {wind} км/ч"
+@server.tool()
+def convert_temperature(value: float, scale: str = "celsius") -> str:
+    """Переводит температуру между шкалами Цельсия и Фаренгейта"""
+    scale_normalized = scale.lower().strip()
+    if scale_normalized.startswith("c"):
+        return f"{value}°C = {round(value * 9 / 5 + 32, 1)}°F"
+    if scale_normalized.startswith("f"):
+        return f"{value}°F = {round((value - 32) * 5 / 9, 1)}°C"
+    return "Ошибка: параметр scale должен быть 'celsius' или 'fahrenheit'."
 
 
 if __name__ == "__main__":
-    if is_stdio == 'True':
-        # уровен протокола stdio
+    if is_stdio == "True":
+        # уровень протокола stdio
         server.run(transport="stdio")
     else:
-        # уровен протокола streamable-http
-        server.run(transport="streamable-http")
+        # уровень протокола streamable-http
+        server.run(transport="streamable-http", host="127.0.0.1", port=8000)
